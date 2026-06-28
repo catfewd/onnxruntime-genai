@@ -91,7 +91,7 @@ jobs:
             --build_shared_lib \
             --android \
             --config MinSizeRel \
-            --parallel 4 \
+            --parallel=4 \
             --use_qnn static_lib \
             --qnn_home $QNN_HOME \
             --android_ndk_path $ANDROID_NDK_HOME \
@@ -114,7 +114,7 @@ jobs:
             --android_api $ANDROID_API \
             --android_ndk_path $ANDROID_NDK_HOME \
             --config MinSizeRel \
-            --parallel 4 \
+            --parallel=4 \
             --ort_home $ORT_HOME \
             --build_java \
             --skip_wheel \
