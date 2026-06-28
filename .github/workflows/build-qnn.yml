@@ -116,8 +116,6 @@ jobs:
             --config MinSizeRel \
             --parallel 4 \
             --ort_home $ORT_HOME \
-            --use_qnn \
-            --qnn_home $QNN_HOME \
             --build_java \
             --skip_wheel \
             --update --build
