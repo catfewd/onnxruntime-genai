@@ -42,8 +42,8 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-           python pip install --upgrade pip
-          pip  install requests
+          python -m pip install --upgrade pip
+          pip -m install requests
 
       - name: Install Linux dependencies
         run: |
