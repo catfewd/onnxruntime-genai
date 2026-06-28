@@ -84,6 +84,11 @@ jobs:
             ccache-Linux-312f5249437a4f923a6b288902bd802532f7b159-qnn
             ccache-Linux-
 
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
       - name: Build ONNX Runtime GenAI (Android, AAR, QNN)
         run: |
           cd onnxruntime-genai
