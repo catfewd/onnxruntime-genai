@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 env:
+  ORT_COMMIT: 312f5249437a4f923a6b288902bd802532f7b159
   NDK_VERSION: r27c
   ANDROID_API: 24
   QNN_HOME: /opt/qnn-sdk
@@ -35,7 +36,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build jq ccache
 
-      # Re-use the exact same QNN SDK cache from the previous ORT build
       - name: Cache QNN SDK
         id: cache-qnn
         uses: actions/cache/restore@v4
@@ -75,18 +75,21 @@ jobs:
           rustup component add rust-src
           rustup target add x86_64-linux-android
 
-      - name: Setup ccache (Reuse ORT cache)
+      # EXACT CACHE KEYS FROM PREVIOUS RUN
+      - name: Setup ccache
         uses: actions/cache@v4
         with:
           path: $HOME/.ccache
-          key: ccache-Linux-qnn-oga
+          key: ccache-${{ runner.os }}-${{ env.ORT_COMMIT }}-qnn
           restore-keys: |
-            ccache-Linux-312f5249437a4f923a6b288902bd802532f7b159-qnn
-            ccache-Linux-
+            ccache-${{ runner.os }}-${{ env.ORT_COMMIT }}-qnn
+            ccache-${{ runner.os }}-${{ env.ORT_COMMIT }}-
+            ccache-${{ runner.os }}-
 
       - name: Build ONNX Runtime GenAI (Android, AAR, QNN)
         run: |
           cd onnxruntime-genai
+          pip install requests
           export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache CCACHE_CPP2=yes
           python build.py \
             --build_dir build_android \
@@ -109,10 +112,3 @@ jobs:
           name: oga-android-aar
           path: onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/outputs/aar/*.aar
           if-no-files-found: error
-
-      - name: Upload GenAI .so files (Debug)
-        uses: actions/upload-artifact@v4
-        with:
-          name: oga-android-so
-          path: onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/intermediates/cxx/RelWithDebInfo/obj/arm64-v8a/*.so
-          if-no-files-found: warn
