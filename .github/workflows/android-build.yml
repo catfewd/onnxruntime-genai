@@ -101,6 +101,15 @@ jobs:
           set -e -x
           ./build.sh --android --android_api=27 --android_ndk_path=${ANDROID_NDK_HOME} --config=RelWithDebInfo --android_abi=${{ env.ANDROID_ABI }} --parallel --build_java --build --skip_wheel
 
+      - name: Upload Android arm64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-genai-android-arm64
+          path: |
+            build/Android/RelWithDebInfo/out/lib/libonnxruntime-genai.so
+            build/Android/RelWithDebInfo/out/lib/libonnxruntime-genai-jni.so
+          if-no-files-found: error
+
       - name: Enable KVM group perms so Android emulator can run
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
