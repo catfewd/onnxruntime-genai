@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 env:
+  ORT_COMMIT: 312f5249437a4f923a6b288902bd802532f7b159
   NDK_VERSION: r27c
   ANDROID_API: 24
   QNN_HOME: /opt/qnn-sdk
@@ -19,6 +20,15 @@ jobs:
           submodules: recursive
           path: onnxruntime-genai
 
+      - name: Checkout ORT source (for QNN build)
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/onnxruntime
+          ref: ${{ env.ORT_COMMIT }}
+          submodules: recursive
+          path: onnxruntime
+          fetch-depth: 1
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -33,7 +43,12 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build jq ccache
+          sudo apt-get install -y cmake ninja-build jq ccache zip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
       # Re-use the exact same QNN SDK cache from the previous ORT build
       - name: Cache QNN SDK
@@ -79,17 +94,33 @@ jobs:
         uses: actions/cache@v4
         with:
           path: $HOME/.ccache
-          key: ccache-Linux-qnn-oga
+          # Exact key from your previous 3-hour run:
+          key: ccache-Linux-312f5249437a4f923a6b288902bd802532f7b159-qnn
           restore-keys: |
             ccache-Linux-312f5249437a4f923a6b288902bd802532f7b159-qnn
             ccache-Linux-
 
-      - name: Install Python dependencies
+      - name: Build ORT with QNN (Fast due to cache)
         run: |
-          python -m pip install --upgrade pip
-          pip install requests
+          cd onnxruntime
+          export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache CCACHE_CPP2=yes
+          ./build.sh \
+            --build_shared_lib \
+            --android \
+            --config MinSizeRel \
+            --parallel 4 \
+            --use_qnn static_lib \
+            --qnn_home ${{ env.QNN_HOME }} \
+            --android_ndk_path ${{ env.ANDROID_NDK_HOME }} \
+            --android_sdk_path ${{ env.ANDROID_SDK_ROOT }} \
+            --android_abi arm64-v8a \
+            --android_api ${{ env.ANDROID_API }} \
+            --cmake_generator Ninja \
+            --build_dir build/Android \
+            --skip_tests \
+            --update --build
 
-      - name: Build ONNX Runtime GenAI (Android, AAR, QNN)
+      - name: Build OGA (Fixed Arguments - No hallucinated flags)
         run: |
           cd onnxruntime-genai
           export CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache CCACHE_CPP2=yes
@@ -100,24 +131,37 @@ jobs:
             --android_abi arm64-v8a \
             --android_api ${{ env.ANDROID_API }} \
             --android_ndk_path $ANDROID_NDK_HOME \
-            --android_sdk_path $ANDROID_SDK_ROOT \
+            --android_home $ANDROID_SDK_ROOT \
             --build_java \
-            --use_qnn \
-            --qnn_home ${{ env.QNN_HOME }} \
             --skip_wheel \
             --update \
             --build
 
-      - name: Upload AAR Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: oga-android-aar
-          path: onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/outputs/aar/*.aar
-          if-no-files-found: error
+      - name: Patch OGA AAR with QNN ORT
+        run: |
+          # Find the built AAR
+          AAR=$(find onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/outputs/aar -name "*.aar" | head -n 1)
+          echo "Found AAR: $AAR"
+          
+          # Extract the AAR
+          mkdir -p aar_extract
+          unzip -o "$AAR" -d aar_extract
+          
+          # Replace libonnxruntime.so with our QNN build
+          QNN_SO=onnxruntime/build/Android/MinSizeRel/libonnxruntime.so
+          cp -v "$QNN_SO" aar_extract/jni/arm64-v8a/libonnxruntime.so
+          
+          # Repackage the AAR
+          cd aar_extract
+          zip -r "../oga-qnn-patched.aar" .
+          cd ..
+          
+          # Move to a known location for upload
+          mv oga-qnn-patched.aar "$(dirname "$AAR")/oga-android-qnn.aar"
 
-      - name: Upload GenAI .so files (Debug)
+      - name: Upload Patched AAR
         uses: actions/upload-artifact@v4
         with:
-          name: oga-android-so
-          path: onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/intermediates/cxx/RelWithDebInfo/obj/arm64-v8a/*.so
-          if-no-files-found: warn
+          name: oga-android-qnn-aar
+          path: onnxruntime-genai/build_android/RelWithDebInfo/src/java/ai/onnxruntime/genai/build/outputs/aar/oga-android-qnn.aar
+          if-no-files-found: error
