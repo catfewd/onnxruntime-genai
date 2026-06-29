@@ -1,0 +1,186 @@
+name: Build OGA Android AAR (CPU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ort_version:
+        description: 'ONNX Runtime version to use (leave empty for default 1.26.0)'
+        required: false
+        type: string
+        default: ''
+
+env:
+  ANDROID_NDK_VERSION: r27c
+  ANDROID_API: 24
+  ANDROID_MIN_SDK: 24
+  ANDROID_TARGET_SDK: 33
+  JAVA_VERSION: '17'
+  ORT_VERSION: '1.26.0'
+
+jobs:
+  build-aar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout OGA source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: onnxruntime-genai
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ninja cmake
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build jq zip unzip ccache
+
+      - name: Setup Android SDK and NDK
+        run: |
+          if [ -z "$ANDROID_SDK_ROOT" ]; then
+            export ANDROID_SDK_ROOT="/opt/android-sdk"
+            mkdir -p "$ANDROID_SDK_ROOT"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          fi
+
+          if [ ! -d "$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" ]; then
+            curl -sL -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip"
+            unzip -q /tmp/ndk.zip -d "$ANDROID_SDK_ROOT/ndk/"
+            mv "$ANDROID_SDK_ROOT/ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}" "$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}"
+            rm -f /tmp/ndk.zip
+          fi
+
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+
+      - name: Cache ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-oga-android-${{ runner.os }}-arm64-v8a
+          restore-keys: |
+            ccache-oga-android-${{ runner.os }}-arm64-v8a
+
+      - name: Download ONNX Runtime Android AAR
+        run: |
+          mkdir -p ort_aar_download
+          if [ -n "${{ inputs.ort_version }}" ]; then
+            ORT_VER="${{ inputs.ort_version }}"
+          else
+            ORT_VER="${{ env.ORT_VERSION }}"
+          fi
+          echo "Downloading ONNX Runtime Android AAR version ${ORT_VER}"
+          curl -sL -o ort_aar_download/onnxruntime-android.aar \
+            "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${ORT_VER}/onnxruntime-android-${ORT_VER}.aar"
+
+      - name: Extract ONNX Runtime AAR
+        run: |
+          mkdir -p ort_aar_extracted
+
+          cd ort_aar_extracted
+          unzip -o "${{ github.workspace }}/ort_aar_download/onnxruntime-android.aar"
+
+          # Maven AAR structure:
+          # - classes.jar (Java bindings)
+          # - runtimes/android/arm64-v8a/libonnxruntime.so (native library)
+          # - runtimes/android/native/onnxruntime.aar (contains JNI headers)
+
+          # Create headers directory and extract JNI headers from the nested AAR
+          mkdir -p headers
+          unzip -o "runtimes/android/native/onnxruntime.aar" -d headers/
+
+          # Create jni/arm64-v8a directory for native libs
+          mkdir -p jni/arm64-v8a
+
+          # Copy the native library to jni/arm64-v8a
+          if [ -d "runtimes/android/arm64-v8a" ]; then
+            cp runtimes/android/arm64-v8a/*.so jni/arm64-v8a/ 2>/dev/null || true
+          fi
+
+          # Also copy any .so from runtimes/android/native if exists
+          if [ -d "runtimes/android/native" ]; then
+            cp runtimes/android/native/*.so jni/arm64-v8a/ 2>/dev/null || true
+          fi
+
+          echo "=== Extracted structure ==="
+          find . -type f -name "*.so" 2>/dev/null
+          ls -la jni/arm64-v8a/ 2>/dev/null || echo "jni/arm64-v8a not found"
+          ls -la headers/ 2>/dev/null | head -20
+
+      - name: Verify ORT library exists
+        run: |
+          if find ort_aar_extracted -name "libonnxruntime.so" 2>/dev/null | grep -q .; then
+            echo "Found libonnxruntime.so"
+          else
+            echo "ERROR: libonnxruntime.so not found!"
+            exit 1
+          fi
+
+      - name: Build OGA Android AAR (arm64-v8a only)
+        run: |
+          cd onnxruntime-genai
+
+          export CMAKE_C_COMPILER_LAUNCHER=ccache
+          export CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          export CCACHE_CPP2=yes
+          export ANDROID_HOME="${{ env.ANDROID_SDK_ROOT }}"
+          export ANDROID_NDK_HOME="${{ env.ANDROID_NDK_ROOT }}"
+
+          python tools/ci_build/github/android/build_aar_package.py \
+            --android_home "$ANDROID_HOME" \
+            --android_ndk_path "$ANDROID_NDK_HOME" \
+            --build_dir build/android_aar \
+            --config Release \
+            --ort_home "${{ github.workspace }}/ort_aar_extracted" \
+            tools/ci_build/github/android/default_aar_build_settings.json
+
+      - name: Verify AAR output
+        run: |
+          echo "=== AAR output ==="
+          find onnxruntime-genai/build/android_aar/aar_out -name "*.aar" -type f 2>/dev/null
+          if [ -d "onnxruntime-genai/build/android_aar/aar_out/Release" ]; then
+            ls -la onnxruntime-genai/build/android_aar/aar_out/Release/
+          fi
+
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-genai-android-aar-arm64-v8a
+          path: |
+            onnxruntime-genai/build/android_aar/aar_out/Release/*.aar
+          if-no-files-found: error
+
+      - name: Display build summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "         BUILD COMPLETE"
+          echo "=========================================="
+          echo ""
+          echo "Output: onnxruntime-genai/build/android_aar/aar_out/Release/"
+          echo ""
+          echo "AAR contains:"
+          echo "  - libonnxruntime-genai.so"
+          echo "  - libonnxruntime-genai-jni.so"
+          echo "  - Java bindings"
+          echo "  - AndroidManifest.xml"
+          echo ""
+          echo "For QNN acceleration later, add to your app:"
+          echo "  implementation 'com.qualcomm.onnxruntime:onnxruntime-qnn:$QNN_VERSION'"
+          echo "And use: config.appendProvider(\"QNN\")"
