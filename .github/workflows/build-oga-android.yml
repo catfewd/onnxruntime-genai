@@ -96,32 +96,16 @@ jobs:
           cd ort_aar_extracted
           unzip -o "${{ github.workspace }}/ort_aar_download/onnxruntime-android.aar"
 
-          # Maven AAR structure:
+          # AAR structure is:
+          # - jni/arm64-v8a/libonnxruntime.so (native libs)
+          # - headers/ (C/C++ API headers)
           # - classes.jar (Java bindings)
-          # - runtimes/android/arm64-v8a/libonnxruntime.so (native library)
-          # - runtimes/android/native/onnxruntime.aar (contains JNI headers)
+          # - AndroidManifest.xml
 
-          # Create headers directory and extract JNI headers from the nested AAR
-          mkdir -p headers
-          unzip -o "runtimes/android/native/onnxruntime.aar" -d headers/
-
-          # Create jni/arm64-v8a directory for native libs
-          mkdir -p jni/arm64-v8a
-
-          # Copy the native library to jni/arm64-v8a
-          if [ -d "runtimes/android/arm64-v8a" ]; then
-            cp runtimes/android/arm64-v8a/*.so jni/arm64-v8a/ 2>/dev/null || true
-          fi
-
-          # Also copy any .so from runtimes/android/native if exists
-          if [ -d "runtimes/android/native" ]; then
-            cp runtimes/android/native/*.so jni/arm64-v8a/ 2>/dev/null || true
-          fi
-
+          # No restructuring needed - structure already matches what GenAI expects
           echo "=== Extracted structure ==="
-          find . -type f -name "*.so" 2>/dev/null
           ls -la jni/arm64-v8a/ 2>/dev/null || echo "jni/arm64-v8a not found"
-          ls -la headers/ 2>/dev/null | head -20
+          ls -la headers/ 2>/dev/null | head -10
 
       - name: Verify ORT library exists
         run: |
